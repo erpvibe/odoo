@@ -153,6 +153,56 @@ class TestHolidaysMultiContract(TestHolidayContract):
         self.assertEqual(second_leave.state, 'confirm')
         self.assertEqual(second_leave.number_of_days, 11)
 
+    def _assert_leave_split_at_version_date(self, leave):
+        self.assertEqual(leave.state, 'refuse')
+        leaves = self.env['hr.leave'].search([
+            ('employee_id', '=', self.jules_emp.id),
+            ('state', '!=', 'refuse'),
+        ], order='date_from')
+        self.assertEqual(
+            [(l.request_date_from, l.request_date_to, l.state) for l in leaves],
+            [
+                (date(2022, 6, 1), date(2022, 6, 15), 'validate'),
+                (date(2022, 6, 16), date(2022, 6, 30), 'confirm'),
+            ],
+            "The leave must be split at the version date, not copied whole for each version.",
+        )
+        self.assertEqual(sum(leaves.mapped('number_of_days')), 22)
+
+    def test_leave_split_new_version_same_contract(self):
+        # Versions of the same contract share the contract dates, so the split
+        # must use the period in which each version applies.
+        leave = self.create_leave(date(2022, 6, 1), date(2022, 6, 30), name="Doctor Appointment", employee_id=self.jules_emp.id)
+        leave.action_approve()
+
+        self.jules_emp.create_version({
+            'date_version': date(2022, 6, 16),
+            'contract_date_start': self.contract_cdi.contract_date_start,
+            'contract_date_end': False,
+            'name': 'New Schedule for Jules',
+            'resource_calendar_id': self.calendar_40h.id,
+            'wage': 5000.0,
+        })
+
+        self._assert_leave_split_at_version_date(leave)
+
+    def test_leave_split_schedule_change_same_contract(self):
+        leave = self.create_leave(date(2022, 6, 1), date(2022, 6, 30), name="Doctor Appointment", employee_id=self.jules_emp.id)
+        leave.action_approve()
+        new_version = self.jules_emp.create_version({
+            'date_version': date(2022, 6, 16),
+            'contract_date_start': self.contract_cdi.contract_date_start,
+            'contract_date_end': False,
+            'name': 'New Version for Jules',
+            'resource_calendar_id': self.calendar_35h.id,
+            'wage': 5500.0,
+        })
+        self.assertEqual(leave.state, 'validate')
+
+        new_version.resource_calendar_id = self.calendar_40h
+
+        self._assert_leave_split_at_version_date(leave)
+
     def test_multi_contracts_draft(self):
         # Check that setting a contract as running correctly
         # make the existing time off to draft for this employee

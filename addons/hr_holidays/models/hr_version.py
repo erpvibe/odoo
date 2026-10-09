@@ -41,9 +41,14 @@ class HrVersion(models.Model):
                 created_versions |= super().create(vals)
                 continue
             leaves = self._get_leaves_from_vals(vals)
+            # A new version of an existing contract starts at its date_version, not at the contract start
+            version_date_start = max(filter(None, [
+                fields.Date.to_date(vals.get('contract_date_start')),
+                fields.Date.to_date(vals.get('date_version')),
+            ]), default=None)
             is_created = False
             for leave in leaves:
-                leaves_state = self._update_leave_state(leave, leaves_state, leave.request_date_from < vals['contract_date_start'])
+                leaves_state = self._update_leave_state(leave, leaves_state, bool(version_date_start) and leave.request_date_from < version_date_start)
                 if not is_created:
                     created_versions |= super().create([vals])
                     is_created = True
@@ -182,7 +187,7 @@ class HrVersion(models.Model):
         return self.env['hr.leave'].search(domain)
 
     def _check_overlapping_contract(self, leave):
-        return leave._get_overlapping_contracts().sorted(key=lambda c: c.contract_date_start)
+        return leave._get_overlapping_contracts().sorted(key=lambda c: c.date_start)
 
     def _update_leave_calendar(self, leave, overlapping_contracts):
         if not overlapping_contracts:
@@ -213,8 +218,10 @@ class HrVersion(models.Model):
     def _populate_all_new_leave_vals_from_split_leave(self, all_new_leave_origin, all_new_leave_vals, overlapping_contracts, leave, leaves_state):
         last_version = overlapping_contracts[-1]
         for overlapping_contract in overlapping_contracts:
-            new_request_date_from = max(leave.request_date_from, overlapping_contract.contract_date_start)
-            new_request_date_to = min(leave.request_date_to, overlapping_contract.contract_date_end or date.max)
+            # Versions of the same contract share the contract dates, so bound each part
+            # by the period in which its version applies.
+            new_request_date_from = max(leave.request_date_from, overlapping_contract.date_start)
+            new_request_date_to = min(leave.request_date_to, overlapping_contract.date_end or date.max)
             new_leave_vals = leave.copy_data({
                 'request_date_from': new_request_date_from,
                 'request_date_to': new_request_date_to,
